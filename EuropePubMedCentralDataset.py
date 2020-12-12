@@ -31,14 +31,15 @@ class EuropePubMedCentralDataset:
                  skip_download,
                  download_workers,
                  unzip_threads,
-                 process_article_threads):
+                 process_article_threads,
+                 max_file_to_download):
 
         self.pubmed_file_path = start_path
         self.skip_download = skip_download
         self.download_workers = download_workers
         self.unzip_threads = unzip_threads
         self.process_article_threads = process_article_threads
-
+        self.max_file_to_download = max_file_to_download
         self.pubmed_dump_file_path = join(self.pubmed_file_path, 'dump')
         self.articles_path = join(self.pubmed_file_path, 'articles')
         self.csv_file_path = join(self.pubmed_file_path, 'csv')
@@ -60,11 +61,14 @@ class EuropePubMedCentralDataset:
             f = self._get_files_in_dir(self.pubmed_dump_file_path)
 
             # get the difference between files to download and files that we have
-            links = self._get_links_from_pubmed()
+            links = self.get_links_from_pubmed()
+            if self.max_file_to_download != None:
+                links = links[:self.max_file_to_download]
+
             todownload = set(links).difference(set(f))
 
             if len(todownload):
-                print(f"Downloading {len(todownload)} files")
+                print("Downloading {} files".format(len(todownload)))
                 with multiprocessing.Pool(self.download_workers) as pool:
                     pool.map(worker_download_links, ((d, self.pubmed_dump_file_path) for d in todownload))
 
@@ -74,7 +78,7 @@ class EuropePubMedCentralDataset:
         # Download articles' IDs --
         if not os.path.isfile(join(self.pubmed_file_path, 'PMC-ids.csv.gz')):
             print("Downloading PMC's IDs dataset")
-            wget.download(f'ftp://ftp.ncbi.nlm.nih.gov/pub/pmc/PMC-ids.csv.gz', self.pubmed_file_path)
+            wget.download('ftp://ftp.ncbi.nlm.nih.gov/pub/pmc/PMC-ids.csv.gz', self.pubmed_file_path)
 
         # Pickle a dictionary of the dataframe containing only the keys that we care about
         if not os.path.isfile(join(self.pubmed_file_path, 'PMC-ids.pkl')):
@@ -106,20 +110,20 @@ class EuropePubMedCentralDataset:
         with ThreadPool(self.unzip_threads) as pool:
             list(tqdm.tqdm(pool.imap(self.worker_unzip_files, f), total=len(f)))
         e = time.time()
-        print(f"Time: {(e - s)}")
+        print("Time: {}".format((e - s)))
 
         # process each article
         s = time.time()
         print("Processing the articles")
         self.process_articles()
         e = time.time()
-        print(f"Time: {(e - s)}")
+        print("Time: {}".format((e - s)))
 
         print("Concatenating dataset")
         s = time.time()
         self._concatenate_datasets(self.csv_file_path)
         e = time.time()
-        print(f"Time: {(e - s)}")
+        print("Time: {}".format((e - s)))
 
     def write_to_csv(self):
         keys = ['cur_doi', 'cur_pmid', 'cur_pmcid', 'cur_name', 'references']
@@ -158,7 +162,7 @@ class EuropePubMedCentralDataset:
             cur_pmid = self.get_id_from_xml_source(cur_xml, 'pmid')
             cur_pmcid = self.get_id_from_xml_source(cur_xml, 'pmcid')
             if cur_pmcid is not None and not cur_pmcid.startswith("PMC"):
-                    cur_pmcid = f"PMC{cur_pmcid}"
+                    cur_pmcid = "PMC{}".format(cur_pmcid)
             cur_doi = self.normalise_doi(self.get_id_from_xml_source(cur_xml, 'doi'))
 
             # If we have no identifier, stop the processing of the article
@@ -225,7 +229,7 @@ class EuropePubMedCentralDataset:
                             if ref_pmcid == "":
                                 ref_pmcid = None
                             elif not ref_pmcid.startswith("PMC"):
-                                ref_pmcid = f"PMC{ref_pmcid}"
+                                ref_pmcid = "PMC{}".format(ref_pmcid)
 
                         ref_url_el = reference.xpath(".//ext-link")
                         if len(ref_url_el):
@@ -249,7 +253,7 @@ class EuropePubMedCentralDataset:
                                 if ref_pmcid is None and row['PMCID'] is not None:
                                     ref_pmcid = row['PMCID']
                                     if not ref_pmcid.startswith("PMC"):
-                                        ref_pmcid = f"PMC{ref_pmcid}"
+                                        ref_pmcid = "PMC{}".format(ref_pmcid)
 
                                 if ref_doi is None and row['DOI'] is not None:
                                     ref_doi = self.normalise_doi(str(row['DOI']))
@@ -278,7 +282,7 @@ class EuropePubMedCentralDataset:
                             'cur_name': [f],
                             'references': [json.dumps(references_list)]
                         })
-                        df.to_csv(join(self.csv_file_path, f"{f}.csv"), sep="\t", index=False)
+                        df.to_csv(join(self.csv_file_path, "{}.csv".format(f)), sep="\t", index=False)
                     else:
                         self.queue.put({
                             'cur_doi': cur_doi,
@@ -293,7 +297,7 @@ class EuropePubMedCentralDataset:
                 with open(join(self.articles_path, f), 'w') as fout:
                     fout.write(fi.read())
                 os.remove(join(self.articles_path, f))
-                print(f"Exception {e} with file: {f}")
+                print("Exception {} with file: {}".format(e, f))
 
     def process_articles(self):
 
@@ -324,7 +328,7 @@ class EuropePubMedCentralDataset:
 
     def worker_unzip_files(self, f: str) -> None:
         # Unzip
-        system(f"gunzip {join(self.pubmed_dump_file_path, f)}")
+        system("gunzip {}".format(join(self.pubmed_dump_file_path, f)))
 
         # This is the new filename
         f = f.replace(".gz", "")
@@ -336,7 +340,7 @@ class EuropePubMedCentralDataset:
         articles = tree.findall('article')
 
         for cur_xml in articles:
-            with open(join(self.articles_path, f"{str(uuid.uuid4())}.xml"), 'w') as writefile:
+            with open(join(self.articles_path, "{}.xml".format(str(uuid.uuid4()))), 'w') as writefile:
                 writefile.write(etree.tostring(cur_xml, pretty_print=True, encoding='unicode'))
 
         # Remove the downloaded dump
@@ -403,10 +407,10 @@ class EuropePubMedCentralDataset:
         """This method extract an id_type from the XML"""
 
         if id_type not in ["doi", "pmid", "pmcid"]:
-            print(f"Wrong id used: {id_type}")
+            print("Wrong id used: {}".format(id_type))
             return None
 
-        id_string = cur_xml.xpath(f".//front/article-meta/article-id[@pub-id-type='{id_type}']")
+        id_string = cur_xml.xpath(".//front/article-meta/article-id[@pub-id-type='{}']".format(id_type))
 
         if len(id_string):
             id_string = u"" + etree.tostring(id_string[0], method="text", encoding='unicode').strip()
@@ -444,7 +448,7 @@ class EuropePubMedCentralDataset:
 
         return join(path, 'dataset.csv')
 
-    def _get_links_from_pubmed(self) -> list:
+    def get_links_from_pubmed(self) -> list:
         links = []
         http = httplib2.Http()
         status, response = http.request('http://europepmc.org/ftp/oa/')
@@ -457,7 +461,7 @@ class EuropePubMedCentralDataset:
 
 def worker_download_links(args):
     todownload, pubmed_dump_file_path = args
-    wget.download(f'http://europepmc.org/ftp/oa/{todownload}', pubmed_dump_file_path)
+    wget.download('http://europepmc.org/ftp/oa/{}'.format(todownload), pubmed_dump_file_path)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -470,10 +474,11 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     e = EuropePubMedCentralDataset(start_path=args.start_path,
-                                   writing_multiple_csv=args.writing_multiple_csv,
-                                   skip_download=args.skip_download,
-                                   download_workers=args.download_workers,
-                                   unzip_threads=args.unzip_threads,
-                                   process_article_threads=args.process_article_threads)
+                                   writing_multiple_csv=bool(args.writing_multiple_csv),
+                                   skip_download=bool(args.skip_download),
+                                   download_workers=int(args.download_workers),
+                                   unzip_threads=int(args.unzip_threads),
+                                   process_article_threads=int(args.process_article_threads),
+                                   max_file_to_download=None)
     e.start()
 
