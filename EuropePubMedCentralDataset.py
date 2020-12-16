@@ -68,7 +68,7 @@ class EuropePubMedCentralDataset:
             todownload = set(links).difference(set(f))
 
             if len(todownload):
-                print("Downloading {} files".format(len(todownload)))
+                print("Downloading {} OA dumps from EuropePubMedCentral".format(len(todownload)))
                 with multiprocessing.Pool(self.download_workers) as pool:
                     pool.map(worker_download_links, ((d, self.pubmed_dump_file_path) for d in todownload))
 
@@ -77,7 +77,7 @@ class EuropePubMedCentralDataset:
 
         # Download articles' IDs --
         if not os.path.isfile(join(self.pubmed_file_path, 'PMC-ids.csv.gz')):
-            print("Downloading PMC's IDs dataset")
+            print("\nDownloading PMC's IDs dataset")
             wget.download('ftp://ftp.ncbi.nlm.nih.gov/pub/pmc/PMC-ids.csv.gz', self.pubmed_file_path)
 
         # Pickle a dictionary of the dataframe containing only the keys that we care about
@@ -86,17 +86,22 @@ class EuropePubMedCentralDataset:
             # Read the dataset and create a single big dict having all the needed keys for entity resolution
             articleids = pd.read_csv(join(self.pubmed_file_path, 'PMC-ids.csv.gz'), usecols=['PMCID', 'PMID', 'DOI'],
                                      low_memory=True)
+            articleids = articleids.drop_duplicates()
 
             view = articleids[articleids['PMID'].notna()]
             view['PMID'] = view['PMID'].astype(int)
-            dataset = view.set_index('PMID').to_dict('index')
+            view_clean = view.drop_duplicates(subset='PMID', keep="last")
+            dataset = view_clean.set_index('PMID').to_dict('index')
             del view
 
             view = articleids[articleids['PMCID'].notna()]
             view['PMID'] = view['PMID'].astype('Int64')
 
             del articleids
-            self.articleids = {**dataset, **view.set_index('PMCID').to_dict('index')}
+
+            view_clean = view.drop_duplicates(subset='PMCID', keep="last")
+
+            self.articleids = {**dataset, **view_clean.set_index('PMCID').to_dict('index')}
             del view
 
             pickle.dump(obj=self.articleids, file=open(join(self.pubmed_file_path, 'PMC-ids.pkl'), 'wb'))
