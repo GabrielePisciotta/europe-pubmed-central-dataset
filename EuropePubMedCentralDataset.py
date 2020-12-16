@@ -21,6 +21,7 @@ from threading import Thread
 import pickle
 import argparse
 
+from config import *
 __author__ = "Gabriele Pisciotta"
 
 class EuropePubMedCentralDataset:
@@ -63,12 +64,12 @@ class EuropePubMedCentralDataset:
             # get the difference between files to download and files that we have
             links = self.get_links_from_pubmed()
             if self.max_file_to_download != None:
-                links = links[:self.max_file_to_download]
+                links = links[:int(self.max_file_to_download)]
 
             todownload = set(links).difference(set(f))
 
             if len(todownload):
-                print("Downloading {} OA dumps from EuropePubMedCentral".format(len(todownload)))
+                print("\nDownloading {} OA dumps from EuropePubMedCentral".format(len(todownload)))
                 with multiprocessing.Pool(self.download_workers) as pool:
                     pool.map(worker_download_links, ((d, self.pubmed_dump_file_path) for d in todownload))
 
@@ -110,21 +111,21 @@ class EuropePubMedCentralDataset:
             self.articleids = pickle.load( open(join(self.pubmed_file_path, 'PMC-ids.pkl'), 'rb'))
 
         # Unzip all the files
-        print("Unzipping all the articles")
+        print("\nUnzipping all the articles")
         s = time.time()
         with ThreadPool(self.unzip_threads) as pool:
             list(tqdm.tqdm(pool.imap(self.worker_unzip_files, f), total=len(f)))
         e = time.time()
-        print("Time: {}".format((e - s)))
+        print("\nTime: {}".format((e - s)))
 
         # process each article
         s = time.time()
-        print("Processing the articles")
+        print("\nProcessing the articles")
         self.process_articles()
         e = time.time()
-        print("Time: {}".format((e - s)))
+        print("\nTime: {}".format((e - s)))
 
-        print("Concatenating dataset")
+        print("\nConcatenating dataset")
         s = time.time()
         self._concatenate_datasets(self.csv_file_path)
         e = time.time()
@@ -435,17 +436,18 @@ class EuropePubMedCentralDataset:
             present_files = list(self._get_files_in_dir(path))
             header_saved = False
 
-            with open(join(path, 'dataset.csv'), 'w') as fout:
-                for f in tqdm.tqdm(present_files):
-                    if f != "dataset.csv":
-                        with open(join(path, f)) as fin:
-                            header = next(fin)
-                            if not header_saved:
-                                fout.write(header)
-                                header_saved = True
-                            for line in fin:
-                                fout.write(line)
-                        os.remove(join(path, f))
+            if len(present_files):
+                with open(join(path, 'dataset.csv'), 'w') as fout:
+                    for f in tqdm.tqdm(present_files):
+                        if f != "dataset.csv":
+                            with open(join(path, f)) as fin:
+                                header = next(fin)
+                                if not header_saved:
+                                    fout.write(header)
+                                    header_saved = True
+                                for line in fin:
+                                    fout.write(line)
+                            os.remove(join(path, f))
 
         df = pd.read_csv(join(path, 'dataset.csv'), sep='\t')
         df.drop_duplicates(inplace=True)
@@ -469,21 +471,13 @@ def worker_download_links(args):
     wget.download('http://europepmc.org/ftp/oa/{}'.format(todownload), pubmed_dump_file_path)
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument("start_path", default="", help="Working path")
-    parser.add_argument("writing_multiple_csv", default=True, help="Save multiple csv and then concatenate them into the final dataset (fast)")
-    parser.add_argument("skip_download", default=False, help="Skip the download of the dump")
-    parser.add_argument("download_workers", default=20, help="Number of worker used to download the OA dump")
-    parser.add_argument("unzip_threads", default=1, help="Number of threads used to unzip the compressed dump files")
-    parser.add_argument("process_article_threads", default=1000, help="Number of threads used to process each XML")
-    args = parser.parse_args()
 
-    e = EuropePubMedCentralDataset(start_path=args.start_path,
-                                   writing_multiple_csv=bool(args.writing_multiple_csv),
-                                   skip_download=bool(args.skip_download),
-                                   download_workers=int(args.download_workers),
-                                   unzip_threads=int(args.unzip_threads),
-                                   process_article_threads=int(args.process_article_threads),
-                                   max_file_to_download=None)
+    e = EuropePubMedCentralDataset(start_path=start_path,
+                                   writing_multiple_csv=writing_multiple_csv,
+                                   skip_download=skip_download,
+                                   download_workers=download_workers,
+                                   unzip_threads=unzip_threads,
+                                   process_article_threads=process_article_threads,
+                                   max_file_to_download=max_file_to_download)
     e.start()
 
