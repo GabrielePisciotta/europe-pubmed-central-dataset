@@ -61,21 +61,53 @@ class EuropePubMedCentralDataset:
             # for each file from the pubmed dump
             f = self._get_files_in_dir(self.pubmed_dump_file_path)
 
+            # load local index of already downloaded dump and add to the list of already downloaded file
+            if os.path.isfile(join(self.pubmed_file_path, 'downloaded-dump.txt')):
+                with open(join(self.pubmed_file_path, 'downloaded-dump.txt'), 'r') as index_file:
+                    f.append(index_file.readline())
+
             # get the difference between files to download and files that we have
             links = self.get_links_from_pubmed()
-            if self.max_file_to_download != None:
-                links = links[:int(self.max_file_to_download)]
+            if len(links) > 0:
+                if self.max_file_to_download != None:
+                    links = links[:int(self.max_file_to_download)]
 
-            todownload = set(links).difference(set(f))
+                todownload = set(links).difference(set(f))
 
-            if len(todownload):
-                print("\nDownloading {} OA dumps from EuropePubMedCentral".format(len(todownload)))
-                with multiprocessing.Pool(self.download_workers) as pool:
-                    pool.map(worker_download_links, ((d, self.pubmed_dump_file_path) for d in todownload))
+                if len(todownload):
+                    print("\nDownloading {} OA dumps from EuropePubMedCentral".format(len(todownload)))
+                    with multiprocessing.Pool(self.download_workers) as pool:
+                        pool.map(worker_download_links, ((d, self.pubmed_dump_file_path) for d in todownload))
+            else:
+                print("No link to download!")
 
         # Update the file list
         f = self._get_files_in_dir(self.pubmed_dump_file_path)
 
+
+        # Unzip all the files
+        if len(f) > 0:
+            print("\nUnzipping all the articles")
+            s = time.time()
+            with ThreadPool(self.unzip_threads) as pool:
+                list(tqdm.tqdm(pool.imap(self.worker_unzip_files, f), total=len(f)))
+            e = time.time()
+            print("\nTime: {}".format((e - s)))
+
+        # process each article
+        f = self._get_files_in_dir(self.articles_path)
+
+        if len(f) > 0:
+            self.load_PMC_ids()
+            s = time.time()
+            print("\nProcessing the articles")
+            self.process_articles()
+            e = time.time()
+            print("\nTime: {}".format((e - s)))
+
+        self._concatenate_datasets(self.csv_file_path)
+
+    def load_PMC_ids(self):
         # Download articles' IDs --
         if not os.path.isfile(join(self.pubmed_file_path, 'PMC-ids.csv.gz')):
             print("\nDownloading PMC's IDs dataset")
@@ -108,28 +140,8 @@ class EuropePubMedCentralDataset:
             pickle.dump(obj=self.articleids, file=open(join(self.pubmed_file_path, 'PMC-ids.pkl'), 'wb'))
 
         else:
+            print("Loading PMC IDs from pickled dict")
             self.articleids = pickle.load( open(join(self.pubmed_file_path, 'PMC-ids.pkl'), 'rb'))
-
-        # Unzip all the files
-        print("\nUnzipping all the articles")
-        s = time.time()
-        with ThreadPool(self.unzip_threads) as pool:
-            list(tqdm.tqdm(pool.imap(self.worker_unzip_files, f), total=len(f)))
-        e = time.time()
-        print("\nTime: {}".format((e - s)))
-
-        # process each article
-        s = time.time()
-        print("\nProcessing the articles")
-        self.process_articles()
-        e = time.time()
-        print("\nTime: {}".format((e - s)))
-
-        print("\nConcatenating dataset")
-        s = time.time()
-        self._concatenate_datasets(self.csv_file_path)
-        e = time.time()
-        print("Time: {}".format((e - s)))
 
     def write_to_csv(self):
         keys = ['cur_doi', 'cur_pmid', 'cur_pmcid', 'cur_name', 'references']
@@ -305,9 +317,7 @@ class EuropePubMedCentralDataset:
                 os.remove(join(self.articles_path, f))
                 print("Exception {} with file: {}".format(e, f))
 
-    def process_articles(self):
-
-        f = self._get_files_in_dir(self.articles_path)
+    def process_articles(self, f):
 
         if not self.writing_multiple_csv:
             consumer = Thread(target=self.write_to_csv)
@@ -436,7 +446,10 @@ class EuropePubMedCentralDataset:
             present_files = list(self._get_files_in_dir(path))
             header_saved = False
 
-            if len(present_files):
+            if len(present_files) > 0:
+
+                print("\nConcatenating dataset")
+                start = time.time()
                 with open(join(path, 'dataset.csv'), 'w') as fout:
                     for f in tqdm.tqdm(present_files):
                         if f != "dataset.csv":
@@ -449,26 +462,45 @@ class EuropePubMedCentralDataset:
                                     fout.write(line)
                             os.remove(join(path, f))
 
-        df = pd.read_csv(join(path, 'dataset.csv'), sep='\t')
-        df.drop_duplicates(inplace=True)
-        df.to_csv(join(path, 'dataset.csv'), sep='\t', index=False)
-
-        return join(path, 'dataset.csv')
+                df = pd.read_csv(join(path, 'dataset.csv'), sep='\t')
+                df.drop_duplicates(inplace=True)
+                df.to_csv(join(path, 'dataset.csv'), sep='\t', index=False)
+                end = time.time()
+                print("Time: {}".format((end-start)))
+                return join(path, 'dataset.csv')
 
     def get_links_from_pubmed(self) -> list:
         links = []
-        http = httplib2.Http()
-        status, response = http.request('http://europepmc.org/ftp/oa/')
-
-        for link in BeautifulSoup(response, 'html.parser', parse_only=SoupStrainer('a')):
-            if link.has_attr('href'):
-                if "xml.gz" in link['href']:
-                    links.append(link['href'])
-        return links
+        http = httplib2.Http(timeout=2)
+        try:
+            status, response = http.request('http://europepmc.org/ftp/oa/')
+            if status['status'] != '200':
+                raise Exception("response code {}".format(status['status']))
+            for link in BeautifulSoup(response, 'html.parser', parse_only=SoupStrainer('a')):
+                if link.has_attr('href'):
+                    if "xml.gz" in link['href']:
+                        links.append(link['href'])
+            return links
+        except Exception as e:
+            print("Cannot get OA links: {}".format(e))
+            return []
 
 def worker_download_links(args):
+    """ If something goes wrong, then wait 3 sec and retry until the max number of possible tries is reached """
     todownload, pubmed_dump_file_path = args
-    wget.download('http://europepmc.org/ftp/oa/{}'.format(todownload), pubmed_dump_file_path)
+    downloaded = False
+
+    retry = 0
+    while not downloaded and retry < max_retry:
+        try:
+            wget.download('http://europepmc.org/ftp/oa/{}'.format(todownload), pubmed_dump_file_path)
+            downloaded = True
+            with open(os.path.join(pubmed_dump_file_path,'..', 'downloaded-dump.txt'), 'a') as index_file:
+                index_file.write(todownload+"\n")
+        except Exception as e:
+            print("\n(retry #{}) Problem with {}: {}".format(retry, todownload, e))
+            retry += 1
+            time.sleep(sec_between_retry)
 
 if __name__ == '__main__':
 
