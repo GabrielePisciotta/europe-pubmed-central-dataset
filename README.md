@@ -49,7 +49,11 @@ Specify the parameters in the `config.py` file:
 - __sec_between_retry__: seconds between each retry 
 - __unzip_threads__: number of threads involved in the extraction of the dumps
 - __process_article_threads__: number of threads involved in the processing of the extracted XML articles
-- __max_file_to_download__: max number of OA dumps to download
+- __max_file_to_download__: max number of OA dumps to download. Set to _None_ in order to download all.
+- __folder_articles__: the number of directories that will be created for each dump where will be stored the XMLs 
+
+_Don't set an high number for unzip_threads and process_article_threads, because you can encounter
+of memory saturation and the error of having "Too many open files"._
 
 ### Run
 Run it with `$ python3 EuropePubMedCentralDataset.py`

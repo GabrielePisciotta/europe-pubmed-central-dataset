@@ -19,10 +19,11 @@ from typing import Optional
 import csv
 from threading import Thread
 import pickle
-import argparse
 
 from config import *
+
 __author__ = "Gabriele Pisciotta"
+
 
 class EuropePubMedCentralDataset:
 
@@ -44,6 +45,7 @@ class EuropePubMedCentralDataset:
         self.pubmed_dump_file_path = join(self.pubmed_file_path, 'dump')
         self.articles_path = join(self.pubmed_file_path, 'articles')
         self.csv_file_path = join(self.pubmed_file_path, 'csv')
+        self.folder_articles = folder_articles
 
         # We can both exploit a queue in order to write into a single dataset.csv
         # or to save multiple csv and then concatenate them into the final dataset
@@ -84,7 +86,6 @@ class EuropePubMedCentralDataset:
         # Update the file list
         f = self._get_files_in_dir(self.pubmed_dump_file_path)
 
-
         # Unzip all the files
         if len(f) > 0:
             print("\nUnzipping all the articles")
@@ -95,13 +96,13 @@ class EuropePubMedCentralDataset:
             print("\nTime: {}".format((e - s)))
 
         # process each article
-        f = self._get_files_in_dir(self.articles_path)
+        f = self._get_articles_in_dir(self.articles_path)
 
         if len(f) > 0:
             self.load_PMC_ids()
             s = time.time()
             print("\nProcessing the articles")
-            self.process_articles()
+            self.process_articles(f)
             e = time.time()
             print("\nTime: {}".format((e - s)))
 
@@ -141,7 +142,7 @@ class EuropePubMedCentralDataset:
 
         else:
             print("Loading PMC IDs from pickled dict")
-            self.articleids = pickle.load( open(join(self.pubmed_file_path, 'PMC-ids.pkl'), 'rb'))
+            self.articleids = pickle.load(open(join(self.pubmed_file_path, 'PMC-ids.pkl'), 'rb'))
 
     def write_to_csv(self):
         keys = ['cur_doi', 'cur_pmid', 'cur_pmcid', 'cur_name', 'references']
@@ -151,7 +152,7 @@ class EuropePubMedCentralDataset:
                 if row == "STOP":
                     return
                 else:
-                    row = [v for k,v in row.items()]
+                    row = [v for k, v in row.items()]
 
                     if not os.path.isfile(join(self.csv_file_path, "dataset.csv")):
                         with open(join(self.csv_file_path, "dataset.csv"), 'w', newline='')  as output_file:
@@ -163,32 +164,34 @@ class EuropePubMedCentralDataset:
                             dict_writer = csv.writer(output_file, delimiter='\t')
                             dict_writer.writerow(row)
 
-
     def worker_article(self, f: str) -> None:
 
         # Use the extracted file
-        with open(join(self.articles_path, f), 'r') as fi:
+        with open(f, 'r') as fi:
+            filename = f.split(os.sep)[-1]
+
             try:
                 cur_xml = etree.parse(fi)
             except Exception as e:
                 print(e)
                 os.makedirs(join(self.articles_path, 'exceptions'), exist_ok=True)
-                with open(join(self.articles_path, f), 'w') as fout:
+                with open(join(self.articles_path, 'exceptions', filename), 'w') as fout:
                     fout.write(fi.read())
-                os.remove(join(self.articles_path, f))
+                os.remove(f)
                 return
+
             cur_pmid = self.get_id_from_xml_source(cur_xml, 'pmid')
             cur_pmcid = self.get_id_from_xml_source(cur_xml, 'pmcid')
             if cur_pmcid is not None and not cur_pmcid.startswith("PMC"):
-                    cur_pmcid = "PMC{}".format(cur_pmcid)
+                cur_pmcid = "PMC{}".format(cur_pmcid)
             cur_doi = self.normalise_doi(self.get_id_from_xml_source(cur_xml, 'doi'))
 
             # If we have no identifier, stop the processing of the article
             if cur_pmid is None and cur_pmcid is None and cur_doi is None:
                 os.makedirs(join(self.articles_path, 'exceptions'), exist_ok=True)
-                with open(join(self.articles_path, f), 'w') as fout:
+                with open(join(self.articles_path, 'exceptions', filename), 'w') as fout:
                     fout.write(fi.read())
-                os.remove(join(self.articles_path, f))
+                os.remove(f)
                 return
 
             try:
@@ -297,10 +300,10 @@ class EuropePubMedCentralDataset:
                             'cur_doi': [cur_doi],
                             'cur_pmid': [cur_pmid],
                             'cur_pmcid': [cur_pmcid],
-                            'cur_name': [f],
+                            'cur_name': [f.split("articles"+os.sep)[-1]],
                             'references': [json.dumps(references_list)]
                         })
-                        df.to_csv(join(self.csv_file_path, "{}.csv".format(f)), sep="\t", index=False)
+                        df.to_csv(join(self.csv_file_path, "{}.csv".format(filename)), sep="\t", index=False)
                     else:
                         self.queue.put({
                             'cur_doi': cur_doi,
@@ -312,12 +315,20 @@ class EuropePubMedCentralDataset:
 
             except Exception as e:
                 os.makedirs(join(self.articles_path, 'exceptions'), exist_ok=True)
-                with open(join(self.articles_path, f), 'w') as fout:
+                with open(join(self.articles_path, 'exceptions', filename), 'w') as fout:
                     fout.write(fi.read())
-                os.remove(join(self.articles_path, f))
+                os.remove(f)
                 print("Exception {} with file: {}".format(e, f))
+                return
 
     def process_articles(self, f):
+
+        articles_to_process = []
+
+        for dump_articles_folder in f:
+            for path, subdirs, files in os.walk(os.path.join(self.articles_path, dump_articles_folder)):
+                for name in files:
+                    articles_to_process.append(os.path.join(path, name))
 
         if not self.writing_multiple_csv:
             consumer = Thread(target=self.write_to_csv)
@@ -325,14 +336,15 @@ class EuropePubMedCentralDataset:
             consumer.start()
 
         with ThreadPool(self.process_article_threads) as pool:
-            list(tqdm.tqdm(pool.imap(self.worker_article, (fi for fi in f)), total=len(f)))
+            list(tqdm.tqdm(pool.imap(self.worker_article, (fi for fi in articles_to_process)), total=len(articles_to_process)))
 
         if not self.writing_multiple_csv:
             self.queue.put("STOP")
             consumer.join()
 
     @staticmethod
-    def normalise_doi(doi_string) -> Optional[str]:  # taken from https://github.com/opencitations/index/blob/master/identifier/doimanager.py
+    def normalise_doi(doi_string) -> Optional[
+        str]:  # taken from https://github.com/opencitations/index/blob/master/identifier/doimanager.py
         if doi_string is not None:
             try:
                 doi_string = re.sub("\0+", "", re.sub("\s+", "", unquote(doi_string[doi_string.index("10."):])))
@@ -343,24 +355,39 @@ class EuropePubMedCentralDataset:
             return None
 
     def worker_unzip_files(self, f: str) -> None:
-        # Unzip
-        system("gunzip {}".format(join(self.pubmed_dump_file_path, f)))
+        try:
+            # Unzip
+            system("gunzip -k {}".format(join(self.pubmed_dump_file_path, f)))
 
-        # This is the new filename
-        f = f.replace(".gz", "")
+            # This is the new filename
+            gzip_name = f
+            f = f.replace(".gz", "")
 
-        # Create one file for each article, having its named
-        tree = etree.parse(join(self.pubmed_dump_file_path, f), etree.XMLParser(remove_blank_text=True))
+            # Create one file for each article, having its named
+            tree = etree.parse(join(self.pubmed_dump_file_path, f), etree.XMLParser(remove_blank_text=True))
 
-        # Extract all the article nodes
-        articles = tree.findall('article')
+            # Extract all the article nodes
+            articles = tree.findall('article')
+            dump_articles_dir = os.path.join(self.articles_path, f.replace(".xml", ""))
+            os.makedirs(dump_articles_dir, exist_ok=True)
 
-        for cur_xml in articles:
-            with open(join(self.articles_path, "{}.xml".format(str(uuid.uuid4()))), 'w') as writefile:
-                writefile.write(etree.tostring(cur_xml, pretty_print=True, encoding='unicode'))
+            n_of_subfolder = len(articles) % self.folder_articles
 
-        # Remove the downloaded dump
-        remove(join(self.pubmed_dump_file_path, f))
+            for i in range(n_of_subfolder):
+                os.makedirs(os.path.join(dump_articles_dir, str(i)), exist_ok=True)
+
+            for i, cur_xml in enumerate(articles):
+                dir_of_article = os.path.join(dump_articles_dir, str(i % self.folder_articles))
+                with open(join(dir_of_article, "{}.xml".format(str(uuid.uuid4()))), 'w') as writefile:
+                    writefile.write(etree.tostring(cur_xml, pretty_print=True, encoding='unicode'))
+
+            # Remove the downloaded dump
+            remove(join(self.pubmed_dump_file_path, f))
+            remove(join(self.pubmed_dump_file_path, gzip_name))
+
+        except Exception as e:
+            print("Exception during the extraction: {}".format(e))
+            system("rm {}{}*.xml".format(self.pubmed_dump_file_path,os.sep))
 
     @staticmethod
     def create_entry_xml(xml_ref):  # Taken from CCC
@@ -441,6 +468,10 @@ class EuropePubMedCentralDataset:
         list_of_files = [f for f in listdir(path) if isfile(join(path, f))]
         return list_of_files
 
+    def _get_articles_in_dir(self, path: str) -> list:
+        list_of_files = [f for f in listdir(path)]
+        return list_of_files
+
     def _concatenate_datasets(self, path: str) -> str:
         if self.writing_multiple_csv:
             present_files = list(self._get_files_in_dir(path))
@@ -466,7 +497,7 @@ class EuropePubMedCentralDataset:
                 df.drop_duplicates(inplace=True)
                 df.to_csv(join(path, 'dataset.csv'), sep='\t', index=False)
                 end = time.time()
-                print("Time: {}".format((end-start)))
+                print("Time: {}".format((end - start)))
                 return join(path, 'dataset.csv')
 
     def get_links_from_pubmed(self) -> list:
@@ -485,6 +516,7 @@ class EuropePubMedCentralDataset:
             print("Cannot get OA links: {}".format(e))
             return []
 
+
 def worker_download_links(args):
     """ If something goes wrong, then wait 3 sec and retry until the max number of possible tries is reached """
     todownload, pubmed_dump_file_path = args
@@ -495,15 +527,15 @@ def worker_download_links(args):
         try:
             wget.download('http://europepmc.org/ftp/oa/{}'.format(todownload), pubmed_dump_file_path)
             downloaded = True
-            with open(os.path.join(pubmed_dump_file_path,'..', 'downloaded-dump.txt'), 'a') as index_file:
-                index_file.write(todownload+"\n")
+            with open(os.path.join(pubmed_dump_file_path, '..', 'downloaded-dump.txt'), 'a') as index_file:
+                index_file.write(todownload + "\n")
         except Exception as e:
             print("\n(retry #{}) Problem with {}: {}".format(retry, todownload, e))
             retry += 1
             time.sleep(sec_between_retry)
 
-if __name__ == '__main__':
 
+if __name__ == '__main__':
     e = EuropePubMedCentralDataset(start_path=start_path,
                                    writing_multiple_csv=writing_multiple_csv,
                                    skip_download=skip_download,
@@ -512,4 +544,3 @@ if __name__ == '__main__':
                                    process_article_threads=process_article_threads,
                                    max_file_to_download=max_file_to_download)
     e.start()
-
