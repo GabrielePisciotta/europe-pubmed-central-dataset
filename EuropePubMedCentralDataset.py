@@ -502,7 +502,7 @@ class EuropePubMedCentralDataset:
 
     def get_links_from_pubmed(self) -> list:
         links = []
-        http = httplib2.Http(timeout=2)
+        http = httplib2.Http(timeout=20)
         try:
             status, response = http.request('http://europepmc.org/ftp/oa/')
             if status['status'] != '200':
