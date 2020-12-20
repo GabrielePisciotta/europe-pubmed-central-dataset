@@ -66,15 +66,15 @@ class EuropePubMedCentralDataset:
             # load local index of already downloaded dump and add to the list of already downloaded file
             if os.path.isfile(join(self.pubmed_file_path, 'downloaded-dump.txt')):
                 with open(join(self.pubmed_file_path, 'downloaded-dump.txt'), 'r') as index_file:
-                    f.append(index_file.readline())
+                    f.append(index_file.readline().replace("\n",""))
 
             # get the difference between files to download and files that we have
             links = self.get_links_from_pubmed()
             if len(links) > 0:
-                if self.max_file_to_download != None:
-                    links = links[:int(self.max_file_to_download)]
 
-                todownload = set(links).difference(set(f))
+                todownload = list(set(links).difference(set(f)))
+                if self.max_file_to_download != None:
+                    todownload = todownload[:int(self.max_file_to_download)]
 
                 if len(todownload):
                     print("\nDownloading {} OA dumps from EuropePubMedCentral".format(len(todownload)))
@@ -176,7 +176,8 @@ class EuropePubMedCentralDataset:
                 print(e)
                 os.makedirs(join(self.articles_path, 'exceptions'), exist_ok=True)
                 with open(join(self.articles_path, 'exceptions', filename), 'w') as fout:
-                    fout.write(fi.read())
+                    for line in fi:
+                        fout.write(line)
                 os.remove(f)
                 return
 
@@ -188,9 +189,11 @@ class EuropePubMedCentralDataset:
 
             # If we have no identifier, stop the processing of the article
             if cur_pmid is None and cur_pmcid is None and cur_doi is None:
-                os.makedirs(join(self.articles_path, 'exceptions'), exist_ok=True)
-                with open(join(self.articles_path, 'exceptions', filename), 'w') as fout:
-                    fout.write(fi.read())
+                os.makedirs(join(self.articles_path, 'without-id'), exist_ok=True)
+                with open(join(self.articles_path, 'without-id', filename), 'w') as fout:
+                    with open(f, 'r') as fi:
+                        for line in fi:
+                            fout.write(line)
                 os.remove(f)
                 return
 
@@ -315,8 +318,11 @@ class EuropePubMedCentralDataset:
 
             except Exception as e:
                 os.makedirs(join(self.articles_path, 'exceptions'), exist_ok=True)
+
                 with open(join(self.articles_path, 'exceptions', filename), 'w') as fout:
-                    fout.write(fi.read())
+                    with open(f, 'r') as fi:
+                        for line in fi:
+                            fout.write(line)
                 os.remove(f)
                 print("Exception {} with file: {}".format(e, f))
                 return
@@ -371,9 +377,7 @@ class EuropePubMedCentralDataset:
             dump_articles_dir = os.path.join(self.articles_path, f.replace(".xml", ""))
             os.makedirs(dump_articles_dir, exist_ok=True)
 
-            n_of_subfolder = len(articles) % self.folder_articles
-
-            for i in range(n_of_subfolder):
+            for i in range(self.folder_articles+1):
                 os.makedirs(os.path.join(dump_articles_dir, str(i)), exist_ok=True)
 
             for i, cur_xml in enumerate(articles):

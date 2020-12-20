@@ -7,4 +7,4 @@ process_article_threads = 100
 max_file_to_download = 1
 max_retry = 20
 sec_between_retry = 3
-folder_articles = 10000
+folder_articles = 50
