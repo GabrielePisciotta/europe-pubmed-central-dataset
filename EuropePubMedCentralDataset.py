@@ -112,7 +112,7 @@ class EuropePubMedCentralDataset:
         # Download articles' IDs --
         if not os.path.isfile(join(self.pubmed_file_path, 'PMC-ids.csv.gz')):
             print("\nDownloading PMC's IDs dataset")
-            wget.download('ftp://ftp.ncbi.nlm.nih.gov/pub/pmc/PMC-ids.csv.gz', self.pubmed_file_path)
+            wget.download('http://ftp.ncbi.nlm.nih.gov/pub/pmc/PMC-ids.csv.gz', self.pubmed_file_path)
 
         # Pickle a dictionary of the dataframe containing only the keys that we care about
         if not os.path.isfile(join(self.pubmed_file_path, 'PMC-ids.pkl')):
